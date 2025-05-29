@@ -3,9 +3,8 @@ import pandas as pd
 import numpy as np
 import random
 
-st.title("Sistem Pemilihan Vendor - Metode Weighted Product")
+st.title("Sistem Pemilihan Vendor - Metode WP + Optimasi Bobot")
 
-# Upload file
 uploaded_file = st.file_uploader("Upload file CSV", type=['csv'])
 
 if uploaded_file:
@@ -17,33 +16,41 @@ if uploaded_file:
     kriteria = df.columns[1:].tolist()
     data = df.iloc[:, 1:].values
 
-    # Pilih atribut untuk tiap kriteria
-    st.subheader("Pilih Jenis Atribut")
+    st.subheader("Tentukan Atribut Cost / Benefit")
     atribut = []
-    col = st.columns(len(kriteria))
+    cols = st.columns(len(kriteria))
     for i, k in enumerate(kriteria):
-        with col[i]:
-            a = st.selectbox(f"{k}", ['cost', 'benefit'], key=f"attr_{i}")
-            atribut.append(a)
+        with cols[i]:
+            atribut.append(st.selectbox(f"{k}", ['cost', 'benefit'], key=f"attr_{i}"))
 
-    # Tombol proses
-    if st.button("Hitung Vendor Terbaik"):
+    st.subheader("Metode Pembobotan")
+    metode = st.radio("Pilih Metode Pembobotan:", ("Manual", "Otomatis (Genetic Algorithm)"))
 
+    if metode == "Manual":
+        st.write("Masukkan bobot untuk masing-masing kriteria (total harus = 1)")
+        bobot_manual = []
+        cols_bobot = st.columns(len(kriteria))
+        for i, k in enumerate(kriteria):
+            with cols_bobot[i]:
+                bobot_manual.append(st.number_input(f"{k}", min_value=0.0, max_value=1.0, step=0.01, key=f"bobot_{i}"))
+
+        total_bobot = sum(bobot_manual)
+        if total_bobot > 1.001 or total_bobot < 0.999:
+            st.error("Total bobot harus sama dengan 1!")
+            st.stop()
+        bobot = np.array(bobot_manual)
+
+    else:  # Otomatis - GA
         def weighted_product(matrix, weights, atribut):
             weights = weights / np.sum(weights)
-            norm = np.zeros_like(matrix, dtype=float)
-            for j in range(matrix.shape[1]):
-                if atribut[j] == 'benefit':
-                    norm[:, j] = matrix[:, j] / np.max(matrix[:, j])
-                else:
-                    norm[:, j] = np.min(matrix[:, j]) / matrix[:, j]
-            wp_score = np.prod(norm ** weights, axis=1)
+            bobot_wp = np.array([-w if attr == 'cost' else w for w, attr in zip(weights, atribut)])
+            norm = matrix / np.max(matrix, axis=0)
+            wp_score = np.prod(norm ** bobot_wp, axis=1)
             return wp_score
 
-        def generate_population(size, n_kriteria):
-            return [np.random.dirichlet(np.ones(n_kriteria)) for _ in range(size)]
-
-        def fitness(weights):
+        def score(weights):
+            weights = np.maximum(weights, 0.05)
+            weights = weights / np.sum(weights)
             scores = weighted_product(data, weights, atribut)
             return np.max(scores)
 
@@ -51,39 +58,61 @@ if uploaded_file:
             alpha = random.random()
             return alpha * p1 + (1 - alpha) * p2
 
-        def mutate(ind, rate=0.1):
+        def mutate(ind, rate=0.05):
             i = random.randint(0, len(ind) - 1)
             ind[i] += np.random.normal(0, rate)
-            ind = np.abs(ind)
-            return ind / np.sum(ind)
+            ind = np.maximum(ind, 0.05)
+            ind = ind / np.sum(ind)
+            return ind
 
-        def evolve(pop, ngen=100):
+        def evolve(pop, ngen=300):
+            elite_size = 10
+            mutation_rate = 0.1
             for _ in range(ngen):
-                pop = sorted(pop, key=lambda x: -fitness(x))
-                new_pop = pop[:5]
+                pop = sorted(pop, key=lambda x: -score(x))
+                new_pop = pop[:elite_size]
                 while len(new_pop) < len(pop):
-                    p1, p2 = random.sample(pop[:10], 2)
+                    p1, p2 = random.sample(pop[:elite_size], 2)
                     child = crossover(p1, p2)
-                    child = mutate(child)
+                    if random.random() < mutation_rate:
+                        child = mutate(child)
+                    else:
+                        child = np.maximum(child, 0.05)
+                        child = child / np.sum(child)
                     new_pop.append(child)
                 pop = new_pop
-            return sorted(pop, key=lambda x: -fitness(x))[0]
+            return sorted(pop, key=lambda x: -score(x))[0]
 
-        populasi = generate_population(size=20, n_kriteria=len(kriteria))
-        bobot_terbaik = evolve(populasi, ngen=100)
+        pop = [np.random.dirichlet(np.ones(len(kriteria))) for _ in range(50)]
+        bobot = evolve(pop)
 
-        st.success("Perhitungan Selesai!")
+    if st.button("Hitung Vendor Terbaik"):
 
-        st.write("**Bobot Optimal:**", np.round(bobot_terbaik, 3))
+        def weighted_product(matrix, weights, atribut):
+            weights = weights / np.sum(weights)
+            bobot_wp = np.array([-w if attr == 'cost' else w for w, attr in zip(weights, atribut)])
+            norm = matrix / np.max(matrix, axis=0)
+            wp_score = np.prod(norm ** bobot_wp, axis=1)
+            return wp_score
 
-        nilai_vendor = weighted_product(data, bobot_terbaik, atribut)
+        # Hitung skor WP (S_i)
+        nilai_vendor = weighted_product(data, bobot, atribut)
 
+        # Normalisasi skor WP → v_i = S_i / ΣS_j
+        total_skor = np.sum(nilai_vendor)
+        nilai_normalisasi = nilai_vendor / total_skor
+
+        # Hasil akhir
         hasil = pd.DataFrame({
             'Vendor': vendor_names,
-            'Skor WP': nilai_vendor
-        }).sort_values(by='Skor WP', ascending=False)
+            'Skor WP (S_i)': nilai_vendor,
+            'Skor Normalisasi (v_i)': nilai_normalisasi
+        }).sort_values(by='Skor Normalisasi (v_i)', ascending=False)
 
-        st.subheader("Hasil Perhitungan WP")
+        st.subheader("Hasil Akhir WP")
         st.dataframe(hasil.reset_index(drop=True))
 
-        st.success(f"✅ Vendor terbaik: **{hasil.iloc[0]['Vendor']}** dengan skor {hasil.iloc[0]['Skor WP']:.4f}")
+        st.success(f"🏆 Vendor terbaik: **{hasil.iloc[0]['Vendor']}** dengan skor normalisasi {hasil.iloc[0]['Skor Normalisasi (v_i)']:.4f}")
+
+        st.write("Bobot yang digunakan:")
+        st.write(pd.DataFrame({'Kriteria': kriteria, 'Bobot': np.round(bobot, 4)}))
