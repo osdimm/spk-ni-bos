@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import random
 
-st.title("Sistem Pemilihan Vendor - Metode WP + Optimasi Bobot")
+st.title("Sistem Pemilihan Vendor - Metode WP wuu perahu + Optimasi Bobot")
 
 uploaded_file = st.file_uploader("Upload file CSV", type=['csv'])
 
